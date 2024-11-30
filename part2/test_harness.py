@@ -80,6 +80,8 @@ def test_correctness_conv2d_kernel(
                         )
 
                         args = [X, W, bias]
+                        # print(f"X: {X}")
+                        # print(f"W: {W}")
                         kwargs = {"pool_size": pool_size}
 
                         out = kernel(*args, **kwargs)
