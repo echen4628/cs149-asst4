@@ -78,6 +78,10 @@ def test_correctness_conv2d_kernel(
                             if not use_bias
                             else np.random.rand(output_channels).astype(np.float32)
                         )
+                        # input_height - filter_height + 1
+                        # out = np.zeros(
+                        #     (batch_size, input_channels, image_dims[0]-kernel_size+1, image_dims[1]-kernel_size+1)
+                        # ).astype(np.float32)
 
                         args = [X, W, bias]
                         # print(f"X: {X}")
@@ -85,6 +89,8 @@ def test_correctness_conv2d_kernel(
                         kwargs = {"pool_size": pool_size}
 
                         out = kernel(*args, **kwargs)
+                        import pdb
+                        pdb.set_trace()
                         out_ref = ref_impl(*args, **kwargs)
 
                         if not np.allclose(out, out_ref):
