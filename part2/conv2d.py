@@ -212,34 +212,104 @@ def fused_conv2d_maxpool(X, W, bias, pool_size=1):
     # Various tiling dimensions (You may want to define more of them)
     c_in_pmax = nl.tile_size.pmax
     n_tiles_c_in = in_channels // c_in_pmax
+    n_tiles_c_out = out_channels // c_in_pmax
 
-    out_channels_idx = nl.arange(out_channels)[:,None,None]
+    out_channels_idx = nl.arange(c_in_pmax)[:,None,None]
     out_pool_height_idx = nl.arange(out_pool_height)[None,:,None]
     out_pool_width_idx = nl.arange(out_pool_width)[None,None,:]
 
-    in_channels_idx = nl.arange(in_channels)[:,None,None]
+    in_channels_idx = nl.arange(c_in_pmax)[:,None,None]
     out_height_idx = nl.arange(out_height)[None,:,None]
     out_width_idx = nl.arange(out_width)[None,None,:]
 
     # Process the images in batches
     for b in nl.affine_range(batch_size):
-        X_out_before_pooling = nl.ndarray(shape=(out_channels, out_height*out_width),
-                                            dtype=X.dtype,
-                                            buffer=nl.sbuf,)
+        for out_tile in nl.affine_range(n_tiles_c_out):
+            for i in nl.affine_range(filter_height):
+                for j in nl.affine_range(filter_width):
+                    X_out_before_pooling = nl.ndarray(shape=(c_in_pmax, out_height*out_width),
+                                                        dtype=X.dtype,
+                                                        buffer=nl.sbuf)
+                    for in_tile in nl.affine_range(n_tiles_c_in):
+
             
-        for i in nl.affine_range(filter_height):
-            for j in nl.affine_range(filter_width):
-                X_b = nl.load(X[b])
-                W_loaded = nl.load(W)
-                print("hi")
-                X_temp = nl.ndarray((in_channels, out_height, out_width), dtype=X_b.dtype)
-                X_temp[in_channels_idx, out_height_idx, out_width_idx] = X_b[in_channels_idx, out_height_idx+i, out_width_idx+j]
-                X_reshape = X_temp.reshape((in_channels, out_height*out_width)) # 128 by 420, use this as rh
-                pdb.set_trace()
-                X_out_before_pooling += nl.matmul(nl.transpose(W_loaded[:,:,i,j]), X_reshape, transpose_x=True) # 128 by 420
-        pdb.set_trace()
-        nl.store(X_out[b], value=X_out_before_pooling.reshape((in_channels, out_height, out_width))[out_channels_idx, out_pool_height_idx, out_pool_width_idx])
-        # nl.store(X_out[b], value=X_b[out_channels_idx, out_pool_height_idx, out_pool_width_idx])
+                # for i in nl.affine_range(filter_height):
+                #     for j in nl.affine_range(filter_width):
+                        X_b = nl.load(X[b, c_in_pmax*in_tile:c_in_pmax*(in_tile+1)])
+                        W_loaded = nl.load(W[c_in_pmax*out_tile:c_in_pmax*(out_tile+1), c_in_pmax*in_tile:c_in_pmax*(in_tile+1)]) 
+                        X_temp = nl.ndarray((c_in_pmax, out_height, out_width), dtype=X_b.dtype)
+                        # edit below
+                        X_temp[in_channels_idx, out_height_idx, out_width_idx] = X_b[in_channels_idx, out_height_idx+i, out_width_idx+j]
+                        X_reshape = X_temp.reshape((c_in_pmax, out_height*out_width)) # 128 by 420, use this as rh
+                        pdb.set_trace()
+                        X_out_before_pooling += nl.matmul(W_loaded[:,:,i,j], X_reshape, transpose_x=False) # 128 by 420
+            pdb.set_trace()
+            nl.store(X_out[b, c_in_pmax*out_tile:c_in_pmax*(out_tile+1)], value=X_out_before_pooling.reshape((c_in_pmax, out_height, out_width))[out_channels_idx, out_pool_height_idx, out_pool_width_idx])
+            # nl.store(X_out[b], value=X_b[out_channels_idx, out_pool_height_idx, out_pool_width_idx])
+
+    return X_out
+
+@nki.jit
+def fused_conv2d_maxpool(X, W, bias, pool_size=1):
+    batch_size, in_channels, input_height, input_width = X.shape
+    out_channels, in_channels_, filter_height, filter_width = W.shape
+    out_channels_ = bias.shape[0]
+
+    assert (
+        in_channels_ == in_channels and out_channels_ == out_channels
+    ), f"Shape mismatch. {in_channels}, {in_channels_}, {out_channels}, {out_channels_}"
+
+    out_height = input_height - filter_height + 1
+    out_width = input_width - filter_width + 1
+
+    out_pool_height = out_height // pool_size
+    out_pool_width = out_width // pool_size
+    
+    # Can assume multiple of 128 to avoid using mask
+    assert in_channels % 128 == 0
+
+    # Can assume one PSUM bank can at least fit one row of the pixels
+    assert nl.tile_size.gemm_moving_fmax >= out_width
+
+    # Initialize output array
+    X_out = nl.ndarray(
+        shape=(batch_size, out_channels, out_pool_height, out_pool_width),
+        dtype=X.dtype,
+        buffer=nl.hbm,
+    )
+
+    # Various tiling dimensions (You may want to define more of them)
+    c_in_pmax = nl.tile_size.pmax
+    n_tiles_c_in = in_channels // c_in_pmax
+    n_tiles_c_out = out_channels // c_in_pmax
+
+    out_channels_idx = nl.arange(nl.tile_size.pmax)[:,None,None]
+    out_pool_height_idx = nl.arange(out_pool_height)[None,:,None]
+    out_pool_width_idx = nl.arange(out_pool_width)[None,None,:]
+
+    in_channels_idx = nl.arange(nl.tile_size.pmax)[:,None,None]
+    out_height_idx = nl.arange(out_height)[None,:,None]
+    out_width_idx = nl.arange(out_width)[None,None,:]
+
+    # Process the images in batches
+    for b in nl.affine_range(batch_size):
+        for out_tile in nl.affine_range(n_tiles_c_out):
+            X_out_tile_before_pooling = nl.zeros((c_in_pmax, out_height*out_width),  X_out.dtype)
+            X_out_tile_after_pooling = nl.zeros((c_in_pmax, out_pool_height, out_pool_width), X_out.dtype)
+            for in_tile in nl.affine_range(n_tiles_c_in):
+                X_b = nl.load(X[b, c_in_pmax*in_tile:c_in_pmax*(in_tile+1)])
+                W_loaded = nl.load(W[c_in_pmax*out_tile:c_in_pmax*(out_tile+1), c_in_pmax*in_tile:c_in_pmax*(in_tile+1)])
+                for i in nl.affine_range(filter_height):
+                    for j in nl.affine_range(filter_width):
+                        # shifted X
+                        X_temp = nl.ndarray((c_in_pmax, out_height, out_width), X_out.dtype)
+                        X_temp[in_channels_idx, out_height_idx, out_width_idx] = X_b[in_channels_idx, out_height_idx+i, out_width_idx+j]
+                        X_reshape = X_temp.reshape((c_in_pmax, out_height*out_width))
+                        X_out_tile_before_pooling += nl.matmul(W_loaded[:,:,i,j], X_reshape, transpose_x=False)
+                # temp_output_tile_accum += X_b[out_channels_idx, out_height_idx, out_width_idx]
+            X_out_tile_after_pooling = X_out_tile_before_pooling.reshape((c_in_pmax, out_height, out_width))[out_channels_idx, out_pool_height_idx, out_pool_width_idx]
+            nl.store(X_out[b, c_in_pmax*out_tile:c_in_pmax*(out_tile+1)], value=X_out_tile_after_pooling)
+
 
     return X_out
 
