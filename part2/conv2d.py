@@ -364,12 +364,11 @@ def fused_conv2d_maxpool(X, W, bias, pool_size=1):
         for output_tile_idx in nl.affine_range(n_tiles_c_out):
             for input_row in nl.affine_range(out_pool_height//2):
                 # for input_col in nl.affine_range(out_width):
-                    X_out_tile_before_pooling = nl.zeros((c_in_pmax, 2, out_width),  X_out.dtype)
+                    X_out_tile_before_pooling = nl.zeros((c_in_pmax, 2, out_width),  X_out.dtype, buffer=nl.psum)
                     # X_out_tile_after_pooling = nl.zeros((c_in_pmax,1),  X_out.dtype)
                     for input_tile_idx in nl.affine_range(n_tiles_c_in):
                         for i in nl.affine_range(filter_height):
                             for j in nl.affine_range(filter_width):
-                                pdb.set_trace()
                                 shifted_row = 2*input_row*pool_size+i
                                 X_rhs_tile = nl.load(X[b,c_in_pmax*input_tile_idx:c_in_pmax*(input_tile_idx+1), shifted_row:shifted_row+2, :])
                                 # X_rhs_tile_shifted = X_rhs_tile.reshape((128, 32))[in_channels_idx, out_height_idx*input_width+(out_width_idx+j)]
@@ -379,8 +378,9 @@ def fused_conv2d_maxpool(X, W, bias, pool_size=1):
                                 X_out_tile_before_pooling += nl.matmul(W_tile[:,:,i,j], X_rhs_tile_shifted, transpose_x=False)
                     # X_out_tile_after_pooling = nl.copy(X_out_tile_before_pooling)
                     # nl.max(X_out_tile_after_pooling.reshape(c_in_pmax, pool_size, 2/pool_size, out_width))
-                    pdb.set_trace()
-                    X_out_tile_after_pooling = nl.max(nl.max(X_out_tile_before_pooling.reshape((128, pool_size, 2/pool_size, 222)), axis=1).reshape((128, 2/pool_size, pool_size, out_width/pool_size)), axis=2)
+                    X_out_tile_before_pooling_with_bias = (nl.load(bias[output_tile_idx*c_in_pmax:(output_tile_idx+1)*(c_in_pmax),])+X_out_tile_before_pooling)
+                    X_out_tile_after_pooling = nl.max(nl.max(X_out_tile_before_pooling_with_bias.reshape((c_in_pmax, pool_size, 2/pool_size, out_width)), axis=1).reshape((c_in_pmax, 2/pool_size, pool_size, out_width/pool_size)), axis=2)
+                    # X_out_tile_after_pooling = nl.max(nl.max(X_out_tile_before_pooling.reshape((128, pool_size, 2/pool_size, 222)), axis=1).reshape((128, 2/pool_size, pool_size, out_width/pool_size)), axis=2)
                     # pdb.set_trace()
                     nl.store(X_out[b, c_in_pmax*output_tile_idx:c_in_pmax*(output_tile_idx+1), 2*input_row:(2*input_row+2)], value=X_out_tile_after_pooling)
         # pdb.set_trace()
