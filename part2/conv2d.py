@@ -531,7 +531,7 @@ def fused_conv2d_maxpool(X, W, bias, pool_size=1):
 
             for output_row in nl.affine_range(out_height//2):
                 
-                partial_sum = nl.zeros((TILE_128, 2*out_width), X_out.dtype, buffer=nl.psum)
+                partial_sum = nl.zeros((TILE_128, 2*out_width), nl.float32, buffer=nl.psum)
                 for input_tile_idx in nl.affine_range(n_tiles_c_in):
                     W_tile = nl.ndarray((TILE_128, TILE_128, filter_height, filter_width), dtype=W.dtype, buffer=nl.sbuf)
                     for i in nl.affine_range(filter_height):
@@ -548,7 +548,19 @@ def fused_conv2d_maxpool(X, W, bias, pool_size=1):
                 temp_before_bias = nl.add(temp_before_bias,current_bias_broadcasted)
                 # X_out_tile_before_pooling_with_bias = (nl.load(bias[output_tile_idx*c_in_pmax:(output_tile_idx+1)*(c_in_pmax),])+X_out_tile_before_pooling)
                 temp = nl.copy(temp_before_bias).reshape((c_in_pmax, 2, out_width))
-                nl.store(X_out[b, output_tile_idx*c_in_pmax:(output_tile_idx+1)*c_in_pmax, 2*output_row:2*output_row+2], value=temp[...])
+                # pdb.set_trace()
+
+                # perform maxpooling
+                if pool_size == 1:
+                    nl.store(X_out[b, output_tile_idx*c_in_pmax:(output_tile_idx+1)*c_in_pmax, 2*output_row:2*output_row+2], value=temp[...])
+                elif pool_size == 2:
+                    temp1 = nl.copy(temp)
+                    temp2 = nl.max(temp1, axis=1)
+                    temp3 = nl.copy(temp2).reshape((c_in_pmax, out_width/pool_size, pool_size))
+                    temp4 = nl.max(temp3, axis=2)
+                    temp5 = nl.copy(temp4).reshape((c_in_pmax, 1, out_width/pool_size))
+
+                    nl.store(X_out[b, output_tile_idx*c_in_pmax:(output_tile_idx+1)*c_in_pmax, output_row:output_row+1], value=temp5[...])
     return X_out
 
 def nki_matmul_tiled_(lhsT, rhs, result):
