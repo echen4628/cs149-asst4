@@ -528,19 +528,22 @@ def fused_conv2d_maxpool(X, W, bias, pool_size=1):
     # Process the images in batches
     for b in nl.affine_range(batch_size):
         for output_tile_idx in nl.affine_range(n_tiles_c_out):
-            partial_sum = nl.zeros((TILE_128, out_height*out_width), X_out.dtype, buffer=nl.psum)
-            for input_tile_idx in nl.affine_range(n_tiles_c_in):
-                W_tile = nl.ndarray((TILE_128, TILE_128, filter_height, filter_width), dtype=W.dtype, buffer=nl.sbuf)
-                for i in nl.affine_range(filter_height):
-                    for j in nl.affine_range(filter_width):
-                        X_tile = nl.ndarray((TILE_128, input_height, input_width), dtype=X.dtype, buffer=nl.sbuf)
-                        X_tile[...] = nl.load(X[b, input_tile_idx*c_in_pmax:(input_tile_idx+1)*c_in_pmax])
-                        X_tile_shifted = nl.copy(X_tile)[in_channels_idx, out_height_idx+i, out_width_idx+j]
-                        X_tile_reshaped = nl.copy(X_tile_shifted).reshape((TILE_128, out_height*out_width))
-                        W_tile[...] = nl.load(W[output_tile_idx*c_in_pmax:(output_tile_idx+1)*c_in_pmax, input_tile_idx*c_in_pmax:(input_tile_idx+1)*c_in_pmax])
-                        partial_sum += nl.matmul(nl.copy(W_tile[:,:,i,j]), X_tile_reshaped, transpose_x=False)
-            temp = nl.copy(partial_sum).reshape((c_in_pmax, out_height, out_width))
-            nl.store(X_out[b, output_tile_idx*c_in_pmax:(output_tile_idx+1)*c_in_pmax], value=temp[out_channels_idx, out_height_idx, out_width_idx])
+
+            for output_row in nl.affine_range(out_height//2):
+                
+                partial_sum = nl.zeros((TILE_128, 2*out_width), X_out.dtype, buffer=nl.psum)
+                for input_tile_idx in nl.affine_range(n_tiles_c_in):
+                    W_tile = nl.ndarray((TILE_128, TILE_128, filter_height, filter_width), dtype=W.dtype, buffer=nl.sbuf)
+                    for i in nl.affine_range(filter_height):
+                        for j in nl.affine_range(filter_width):
+                            X_tile = nl.ndarray((TILE_128, 2, input_width), dtype=X.dtype, buffer=nl.sbuf)
+                            X_tile[...] = nl.load(X[b, input_tile_idx*c_in_pmax:(input_tile_idx+1)*c_in_pmax, i+output_row*2:i+output_row*2+2,:])
+                            X_tile_shifted = nl.copy(X_tile)[in_channels_idx, nl.arange(2)[None,:,None], out_width_idx+j]
+                            X_tile_reshaped = nl.copy(X_tile_shifted).reshape((TILE_128, 2*out_width))
+                            W_tile[...] = nl.load(W[output_tile_idx*c_in_pmax:(output_tile_idx+1)*c_in_pmax, input_tile_idx*c_in_pmax:(input_tile_idx+1)*c_in_pmax])
+                            partial_sum += nl.matmul(nl.copy(W_tile[:,:,i,j]), X_tile_reshaped, transpose_x=False)
+                temp = nl.copy(partial_sum).reshape((c_in_pmax, 2, out_width))
+                nl.store(X_out[b, output_tile_idx*c_in_pmax:(output_tile_idx+1)*c_in_pmax, 2*output_row:2*output_row+2], value=temp[...])
     return X_out
 
 def nki_matmul_tiled_(lhsT, rhs, result):
