@@ -542,7 +542,12 @@ def fused_conv2d_maxpool(X, W, bias, pool_size=1):
                             X_tile_reshaped = nl.copy(X_tile_shifted).reshape((TILE_128, 2*out_width))
                             W_tile[...] = nl.load(W[output_tile_idx*c_in_pmax:(output_tile_idx+1)*c_in_pmax, input_tile_idx*c_in_pmax:(input_tile_idx+1)*c_in_pmax])
                             partial_sum += nl.matmul(nl.copy(W_tile[:,:,i,j]), X_tile_reshaped, transpose_x=False)
-                temp = nl.copy(partial_sum).reshape((c_in_pmax, 2, out_width))
+                temp_before_bias = nl.copy(partial_sum)
+                current_bias = nl.load(bias[output_tile_idx*c_in_pmax:(output_tile_idx+1)*(c_in_pmax),])
+                current_bias_broadcasted = nl.copy(current_bias).broadcast_to((c_in_pmax, 2*out_width))
+                temp_before_bias = nl.add(temp_before_bias,current_bias_broadcasted)
+                # X_out_tile_before_pooling_with_bias = (nl.load(bias[output_tile_idx*c_in_pmax:(output_tile_idx+1)*(c_in_pmax),])+X_out_tile_before_pooling)
+                temp = nl.copy(temp_before_bias).reshape((c_in_pmax, 2, out_width))
                 nl.store(X_out[b, output_tile_idx*c_in_pmax:(output_tile_idx+1)*c_in_pmax, 2*output_row:2*output_row+2], value=temp[...])
     return X_out
 
