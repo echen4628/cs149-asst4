@@ -538,14 +538,16 @@ def fused_conv2d_maxpool(X, W, bias, pool_size=1):
                         for j in nl.affine_range(filter_width):
                             X_tile = nl.ndarray((TILE_128, 2, input_width), dtype=X.dtype, buffer=nl.sbuf)
                             X_tile[...] = nl.load(X[b, input_tile_idx*c_in_pmax:(input_tile_idx+1)*c_in_pmax, i+output_row*2:i+output_row*2+2,:])
-                            X_tile_shifted = nl.copy(X_tile)[in_channels_idx, nl.arange(2)[None,:,None], out_width_idx+j]
-                            X_tile_reshaped = nl.copy(X_tile_shifted).reshape((TILE_128, 2*out_width))
+                            X_tile_shifted = nl.copy(X_tile, dtype=X.dtype)[in_channels_idx, nl.arange(2)[None,:,None], out_width_idx+j]
+                            X_tile_reshaped = nl.copy(X_tile_shifted, dtype=X.dtype).reshape((TILE_128, 2*out_width))
                             W_tile[...] = nl.load(W[output_tile_idx*c_in_pmax:(output_tile_idx+1)*c_in_pmax, input_tile_idx*c_in_pmax:(input_tile_idx+1)*c_in_pmax])
                             partial_sum += nl.matmul(nl.copy(W_tile[:,:,i,j]), X_tile_reshaped, transpose_x=False)
-                temp_before_bias = nl.copy(partial_sum)
-                current_bias = nl.load(bias[output_tile_idx*c_in_pmax:(output_tile_idx+1)*(c_in_pmax),])
-                current_bias_broadcasted = nl.copy(current_bias).broadcast_to((c_in_pmax, 2*out_width))
-                temp_before_bias = nl.add(temp_before_bias,current_bias_broadcasted)
+                temp_before_bias = nl.copy(partial_sum, dtype=X.dtype)
+                current_bias = nl.load(bias[output_tile_idx*c_in_pmax:(output_tile_idx+1)*(c_in_pmax),], dtype=bias.dtype)
+                # current_bias_broadcasted = nl.copy(current_bias).broadcast_to((c_in_pmax, 2*out_width))
+                # temp_before_bias = nl.add(temp_before_bias,current_bias_broadcasted)
+                temp_before_bias = nisa.tensor_scalar(temp_before_bias, np.add, current_bias)
+
                 # X_out_tile_before_pooling_with_bias = (nl.load(bias[output_tile_idx*c_in_pmax:(output_tile_idx+1)*(c_in_pmax),])+X_out_tile_before_pooling)
                 temp = nl.copy(temp_before_bias).reshape((c_in_pmax, 2, out_width))
                 # pdb.set_trace()
